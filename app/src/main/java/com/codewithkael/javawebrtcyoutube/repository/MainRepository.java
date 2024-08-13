@@ -2,6 +2,10 @@ package com.codewithkael.javawebrtcyoutube.repository;
 
 import android.content.Context;
 import android.util.Log;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.List;
+import java.util.ArrayList;
 
 import com.codewithkael.javawebrtcyoutube.remote.FirebaseClient;
 import com.codewithkael.javawebrtcyoutube.utils.DataModel;
@@ -21,58 +25,77 @@ import org.webrtc.SurfaceViewRenderer;
 
 public class MainRepository implements WebRTCClient.Listener {
 
-    public Listener listener;
+    private static MainRepository instance;
     private final Gson gson = new Gson();
     private final FirebaseClient firebaseClient;
-
     private WebRTCClient webRTCClient;
-
     private String currentUsername;
-
     private SurfaceViewRenderer remoteView;
-
     private String target;
-    private void updateCurrentUsername(String username){
-        this.currentUsername = username;
-    }
+    private Map<String, List<String>> roomParticipants;
+    public Listener listener;  // Listener değişkenini tanımlıyoruz
 
-    private MainRepository(){
+    private MainRepository() {
         this.firebaseClient = new FirebaseClient();
+        this.roomParticipants = new HashMap<>();
     }
 
-    private static MainRepository instance;
-    public static MainRepository getInstance(){
-        if (instance == null){
+    public static synchronized MainRepository getInstance() {
+        if (instance == null) {
             instance = new MainRepository();
         }
         return instance;
     }
 
-    public void login(String username, Context context, SuccessCallBack callBack){
-        firebaseClient.login(username,()->{
+    public boolean canJoinRoom(String roomName, String userName) {
+        List<String> participants = roomParticipants.getOrDefault(roomName, new ArrayList<>());
+        if (participants.size() < 20) {
+            participants.add(userName);
+            roomParticipants.put(roomName, participants);
+            return true;
+        }
+        return false;
+    }
+
+    public void leaveRoom(String roomName, String userName) {
+        List<String> participants = roomParticipants.get(roomName);
+        if (participants != null) {
+            participants.remove(userName);
+            if (participants.isEmpty()) {
+                roomParticipants.remove(roomName);
+            }
+        }
+    }
+
+    private void updateCurrentUsername(String username) {
+        this.currentUsername = username;
+    }
+
+    public void login(String username, Context context, SuccessCallBack callBack) {
+        firebaseClient.login(username, () -> {
             updateCurrentUsername(username);
-            this.webRTCClient = new WebRTCClient(context,new MyPeerConnectionObserver(){
+            this.webRTCClient = new WebRTCClient(context, new MyPeerConnectionObserver() {
                 @Override
                 public void onAddStream(MediaStream mediaStream) {
                     super.onAddStream(mediaStream);
-                    try{
+                    try {
                         mediaStream.videoTracks.get(0).addSink(remoteView);
-                    }catch (Exception e){
+                    } catch (Exception e) {
                         e.printStackTrace();
                     }
                 }
 
                 @Override
                 public void onConnectionChange(PeerConnection.PeerConnectionState newState) {
-                    Log.d("TAG", "onConnectionChange: "+newState);
+                    Log.d("TAG", "onConnectionChange: " + newState);
                     super.onConnectionChange(newState);
-                    if (newState == PeerConnection.PeerConnectionState.CONNECTED && listener!=null){
+                    if (newState == PeerConnection.PeerConnectionState.CONNECTED && listener != null) {
                         listener.webrtcConnected();
                     }
 
                     if (newState == PeerConnection.PeerConnectionState.CLOSED ||
-                            newState == PeerConnection.PeerConnectionState.DISCONNECTED ){
-                        if (listener!=null){
+                            newState == PeerConnection.PeerConnectionState.DISCONNECTED) {
+                        if (listener != null) {
                             listener.webrtcClosed();
                         }
                     }
@@ -81,24 +104,24 @@ public class MainRepository implements WebRTCClient.Listener {
                 @Override
                 public void onIceCandidate(IceCandidate iceCandidate) {
                     super.onIceCandidate(iceCandidate);
-                    webRTCClient.sendIceCandidate(iceCandidate,target);
+                    webRTCClient.sendIceCandidate(iceCandidate, target);
                 }
-            },username);
+            }, username);
             webRTCClient.listener = this;
             callBack.onSuccess();
         });
     }
 
-    public void initLocalView(SurfaceViewRenderer view){
+    public void initLocalView(SurfaceViewRenderer view) {
         webRTCClient.initLocalSurfaceView(view);
     }
 
-    public void initRemoteView(SurfaceViewRenderer view){
+    public void initRemoteView(SurfaceViewRenderer view) {
         webRTCClient.initRemoteSurfaceView(view);
         this.remoteView = view;
     }
 
-    public void startCall(String target){
+    public void startCall(String target) {
         webRTCClient.call(target);
     }
 
@@ -106,62 +129,62 @@ public class MainRepository implements WebRTCClient.Listener {
         webRTCClient.switchCamera();
     }
 
-    public void toggleAudio(Boolean shouldBeMuted){
+    public void toggleAudio(Boolean shouldBeMuted) {
         webRTCClient.toggleAudio(shouldBeMuted);
     }
-    public void toggleVideo(Boolean shouldBeMuted){
+
+    public void toggleVideo(Boolean shouldBeMuted) {
         webRTCClient.toggleVideo(shouldBeMuted);
     }
-    public void sendCallRequest(String target, ErrorCallBack errorCallBack){
+
+    public void sendCallRequest(String target, ErrorCallBack errorCallBack) {
         firebaseClient.sendMessageToOtherUser(
-                new DataModel(target,currentUsername,null, DataModelType.StartCall),errorCallBack
+                new DataModel(target, currentUsername, null, DataModelType.StartCall), errorCallBack
         );
     }
 
-    public void endCall(){
+    public void endCall() {
         webRTCClient.closeConnection();
     }
 
-    public void subscribeForLatestEvent(NewEventCallBack callBack){
+    public void subscribeForLatestEvent(NewEventCallBack callBack) {
         firebaseClient.observeIncomingLatestEvent(model -> {
-            switch (model.getType()){
-
+            switch (model.getType()) {
                 case Offer:
                     this.target = model.getSender();
                     webRTCClient.onRemoteSessionReceived(new SessionDescription(
-                            SessionDescription.Type.OFFER,model.getData()
+                            SessionDescription.Type.OFFER, model.getData()
                     ));
                     webRTCClient.answer(model.getSender());
                     break;
                 case Answer:
                     this.target = model.getSender();
                     webRTCClient.onRemoteSessionReceived(new SessionDescription(
-                            SessionDescription.Type.ANSWER,model.getData()
+                            SessionDescription.Type.ANSWER, model.getData()
                     ));
                     break;
                 case IceCandidate:
-                        try{
-                            IceCandidate candidate = gson.fromJson(model.getData(),IceCandidate.class);
-                            webRTCClient.addIceCandidate(candidate);
-                        }catch (Exception e){
-                            e.printStackTrace();
-                        }
+                    try {
+                        IceCandidate candidate = gson.fromJson(model.getData(), IceCandidate.class);
+                        webRTCClient.addIceCandidate(candidate);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
                     break;
                 case StartCall:
                     this.target = model.getSender();
                     callBack.onNewEventReceived(model);
                     break;
             }
-
         });
     }
 
     @Override
     public void onTransferDataToOtherPeer(DataModel model) {
-        firebaseClient.sendMessageToOtherUser(model,()->{});
+        firebaseClient.sendMessageToOtherUser(model, () -> {});
     }
 
-    public interface Listener{
+    public interface Listener {
         void webrtcConnected();
         void webrtcClosed();
     }
